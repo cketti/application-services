@@ -2,13 +2,15 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+use crate::cache;
 use crate::config::RemoteSettingsConfig;
 use crate::error::{RemoteSettingsError, Result};
-use crate::{RemoteSettingsServer, UniffiCustomTypeConverter};
+use crate::{RemoteSettingsCache, RemoteSettingsServer, UniffiCustomTypeConverter};
 use parking_lot::Mutex;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{
     borrow::Cow,
+    sync::Arc,
     time::{Duration, Instant},
 };
 use url::Url;
@@ -72,6 +74,43 @@ impl Client {
         self.get_records_with_options(
             GetItemsOptions::new().filter_gt("last_modified", timestamp.to_string()),
         )
+    }
+
+    /// Fetches records, using a cached response for efficiency.
+    pub fn get_cached_records(
+        &self,
+        cache: Arc<dyn RemoteSettingsCache>,
+        update_from_server: bool,
+    ) -> Result<RemoteSettingsResponse> {
+        let cached: Option<RemoteSettingsResponse> =
+            cache
+                .get()
+                .and_then(|data| match serde_json::from_str(&data) {
+                    Ok(r) => Some(r),
+                    // Invalid data stored in the cache, ignore it.
+                    Err(e) => {
+                        log::warn!("Error deserializing cached data: {e}");
+                        None
+                    }
+                });
+        let response = match cached {
+            None => self.get_records()?,
+            Some(cached) => {
+                if !update_from_server {
+                    // return early to avoid calling store() with the same data
+                    return Ok(cached);
+                }
+
+                let new = self.get_records_since(cached.last_modified)?;
+                cache::merge_cache_and_response(cached, new)
+            }
+        };
+        match serde_json::to_string(&response) {
+            Ok(data) => cache.store(data),
+            Err(e) => log::warn!("Error seralizing cached data: {e}"),
+        };
+
+        Ok(response)
     }
 
     /// Fetches records from this client's collection with the given options.
@@ -215,7 +254,7 @@ impl Client {
 
 /// Data structure representing the top-level response from the Remote Settings.
 /// [last_modified] will be extracted from the etag header of the response.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 pub struct RemoteSettingsResponse {
     pub records: Vec<RemoteSettingsRecord>,
     pub last_modified: u64,
@@ -228,7 +267,7 @@ struct RecordsResponse {
 
 /// A parsed Remote Settings record. Records can contain arbitrary fields, so clients
 /// are required to further extract expected values from the [fields] member.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 pub struct RemoteSettingsRecord {
     pub id: String,
     pub last_modified: u64,
@@ -241,7 +280,7 @@ pub struct RemoteSettingsRecord {
 
 /// Attachment metadata that can be optionally attached to a [Record]. The [location] should
 /// included in calls to [Client::get_attachment].
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 pub struct Attachment {
     pub filename: String,
     pub mimetype: String,

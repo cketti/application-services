@@ -2,9 +2,11 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+pub mod cache;
 pub mod error;
+pub use cache::RemoteSettingsCache;
 pub use error::{RemoteSettingsError, Result};
-use std::{fs::File, io::prelude::Write};
+use std::{fs::File, io::prelude::Write, sync::Arc};
 pub mod client;
 pub use client::{
     Attachment, Client, GetItemsOptions, RemoteSettingsRecord, RemoteSettingsResponse,
@@ -36,6 +38,14 @@ impl RemoteSettings {
     pub fn get_records_since(&self, timestamp: u64) -> Result<RemoteSettingsResponse> {
         let resp = self.client.get_records_since(timestamp)?;
         Ok(resp)
+    }
+
+    pub fn get_cached_records(
+        &self,
+        cache: Arc<dyn RemoteSettingsCache>,
+        update_from_server: bool,
+    ) -> Result<RemoteSettingsResponse> {
+        self.client.get_cached_records(cache, update_from_server)
     }
 
     pub fn download_attachment_to_path(

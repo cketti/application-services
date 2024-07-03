@@ -69,7 +69,30 @@ interface RemoteSettings {
     [Throws=RemoteSettingsError]
     RemoteSettingsResponse get_records_since(u64 timestamp);
 
+    // Fetch all records from the server, using a RemoteSettingsCache instance to avoid
+    // re-downloading data.
+    //
+    // Depending on the cache and the `update_from_server` flag, one of 3 things will happen:
+    //
+    // * If the cache is empty, then all data will be downloaded from the server.  This typically
+    //   happens on first use or when the cache is deleted.
+    // * If the cache is present and `update_from_server` is false, then the cached data will be
+    //   returned without any requests to the server.
+    // * If the cache is present and `update_from_server` is true, then a new request to the server
+    //   will be made.  The cached data will be used as a baseline,  the client will send a last
+    //   modified time, and the server will only return records that have been added/updated/deleted
+    //   since then.
+    [Throws=RemoteSettingsError]
+    RemoteSettingsResponse get_cached_records(RemoteSettingsCache cache, optional boolean update_from_server = false);
+
     // Download an attachment with the provided id to the provided path.
     [Throws=RemoteSettingsError]
     void download_attachment_to_path(string attachment_id, string path);
+};
+
+// Consumer-supplied interface for storing cached values for `get_cached_records`
+[Trait]
+interface RemoteSettingsCache {
+    void store(string value);
+    string? get();
 };
